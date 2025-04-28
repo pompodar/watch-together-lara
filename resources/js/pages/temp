@@ -28,9 +28,10 @@ declare global {
 }
 
 export default function Watch({ room }: { room: Room }) {
-  const breadcrumbs: BreadcrumbItem[] = [
-    { title: `Room: ${room.name}`, href: `/rooms/${room.name}` },
-  ];
+
+    const breadcrumbs: BreadcrumbItem[] = [
+        { title: "Room: " + room.name, href: `/rooms/${room.name}` },
+    ];
 
   // State & refs
   const [videoId, setVideoId] = useState('');
@@ -52,21 +53,14 @@ export default function Watch({ room }: { room: Room }) {
   const readyRef = useRef(false);
   const mountedRef = useRef(false);
   const apiLoadedRef = useRef(false);
-  const pollerRef = useRef<number | null>(null);
-
-  // Debounced sync for seek only
-  const sendSyncEvent = useRef(
-    debounce((event: 'play' | 'pause' | 'seek', time?: number) => {
-      if (!syncEnabled) return;
-      axios.post(`/api/rooms/${room.name}/sync`, { event, time, source: syncSource });
-    }, 500)
-  ).current;
+  const rafRef = useRef<number>();
 
   // Extract video ID
   useEffect(() => {
     try {
       const u = new URL(room.youtube_video_id);
-      setVideoId(u.searchParams.get('v') || room.youtube_video_id);
+      const v = u.searchParams.get('v') || room.youtube_video_id;
+      setVideoId(v);
     } catch {
       setVideoId(room.youtube_video_id);
     }
@@ -84,44 +78,28 @@ export default function Watch({ room }: { room: Room }) {
     };
   }, []);
 
-  // Polling slider
-  const startPolling = () => {
-    if (pollerRef.current == null) {
-      pollerRef.current = window.setInterval(() => {
-        if (readyRef.current && playerRef.current) {
-          setSeekTime(playerRef.current.getCurrentTime());
-        }
-      }, 200);
+  // Smooth polling via rAF
+  const pollTime = () => {
+    if (readyRef.current && playerRef.current) {
+      setSeekTime(playerRef.current.getCurrentTime());
     }
-  };
-  const stopPolling = () => {
-    if (pollerRef.current !== null) {
-      clearInterval(pollerRef.current);
-      pollerRef.current = null;
+    if (playerRef.current.getPlayerState() === window.YT.PlayerState.PLAYING) {
+      rafRef.current = requestAnimationFrame(pollTime);
     }
   };
 
-  // Initialize player
+  // Initialize player when everyone is ready
   useEffect(() => {
-    if (
-      !apiLoadedRef.current ||
-      !videoId ||
-      !start ||
-      !mountedRef.current ||
-      !allUsersStarted ||
-      !playerContainerRef.current
-    ) {
-      return;
-    }
+    if (!apiLoadedRef.current || !allUsersStarted || !videoId || !mountedRef.current) return;
     if (playerRef.current) playerRef.current.destroy();
 
     setStatus('Initializing player...');
-    playerRef.current = new window.YT.Player(playerContainerRef.current, {
+    playerRef.current = new window.YT.Player(playerContainerRef.current!, {
       videoId,
       playerVars: {
         autoplay: 0,
-        controls: 0,
-        rel: 0,
+        controls: 1,
+        rel: 1,
         modestbranding: 1,
         disablekb: 1,
         fs: 0,
@@ -134,18 +112,25 @@ export default function Watch({ room }: { room: Room }) {
           setDuration(e.target.getDuration());
         },
         onStateChange: (e: any) => {
+          // stop any ongoing rAF
+          if (rafRef.current) cancelAnimationFrame(rafRef.current);
+
+          // broadcast sync
           if (syncEnabled) {
-            if (e.data === window.YT.PlayerState.PLAYING) sendSyncEvent('play');
-            else if (e.data === window.YT.PlayerState.PAUSED) sendSyncEvent('pause');
-            else if (e.data === window.YT.PlayerState.BUFFERING)
-              sendSyncEvent('seek', playerRef.current.getCurrentTime());
+            if (e.data === window.YT.PlayerState.PLAYING) sendSync('play');
+            if (e.data === window.YT.PlayerState.PAUSED) sendSync('pause');
+            if (e.data === window.YT.PlayerState.BUFFERING)
+              sendSync('seek', playerRef.current.getCurrentTime());
           }
-          if (e.data === window.YT.PlayerState.PLAYING) startPolling();
-          else stopPolling();
+
+          // start rAF polling on play
+          if (e.data === window.YT.PlayerState.PLAYING) {
+            rafRef.current = requestAnimationFrame(pollTime);
+          }
         },
       },
     });
-  }, [videoId, start, allUsersStarted]);
+  }, [allUsersStarted, videoId]);
 
   // mount/unmount
   useEffect(() => {
@@ -153,7 +138,7 @@ export default function Watch({ room }: { room: Room }) {
     return () => {
       mountedRef.current = false;
       if (playerRef.current) playerRef.current.destroy();
-      stopPolling();
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
   }, []);
 
@@ -169,13 +154,13 @@ export default function Watch({ room }: { room: Room }) {
       forceTLS: true,
     });
     const chan = window.Echo.channel(`public-room.${room.name}`);
-    const chanStarted = window.Echo.channel(`public-room-users-started.${room.name}`);
+    const chanS = window.Echo.channel(`public-room-users-started.${room.name}`);
 
     chan.listen('.sync', handleSyncEvent);
     chan.listen('.user-joined', (d: any) => {
       if (!userList.includes(d.source)) setUserList(u => [...u, d.source]);
     });
-    chanStarted.listen('.user-started', () => setUsersStarted(u => u + 1));
+    chanS.listen('.user-started', () => setUsersStarted(u => u + 1));
 
     axios.post(`/api/rooms/${room.name}/user-joined`, { source: syncSource });
     axios.get(`/api/rooms/${room.name}/users`).then(r => setUserList(r.data.users));
@@ -186,7 +171,12 @@ export default function Watch({ room }: { room: Room }) {
     };
   }, [room.name]);
 
-  // Handle sync
+  // Sync helpers
+  const sendSync = debounce((ev: 'play' | 'pause' | 'seek', t?: number) => {
+    if (!syncEnabled) return;
+    axios.post(`/api/rooms/${room.name}/sync`, { event: ev, time: t, source: syncSource });
+  }, 200);
+
   const handleSyncEvent = (d: SyncEvent) => {
     if (d.source === syncSource || !syncEnabled || !readyRef.current) return;
     const { event, time } = d.payload;
@@ -195,27 +185,19 @@ export default function Watch({ room }: { room: Room }) {
     if (event === 'seek' && time != null) playerRef.current.seekTo(time, true);
   };
 
-  // Start button
-  const sendUserStarted = () => {
+  // Start & controls
+  const doStart = () => {
     setStart(true);
     axios.post(`/api/rooms/${room.name}/user-started`, { source: syncSource });
   };
-
-  // Manual controls
-  const play = () => {
-    if (!readyRef.current) return setStatus('Not ready');
-    playerRef.current.playVideo();
-  };
-  const pause = () => {
-    if (!readyRef.current) return setStatus('Not ready');
-    playerRef.current.pauseVideo();
-  };
-  const handleSeekChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
     const t = parseFloat(e.target.value);
     setSeekTime(t);
     if (readyRef.current) playerRef.current.seekTo(t, true);
-    if (syncEnabled) sendSyncEvent('seek', t);
+    if (allUsersStarted && syncEnabled) sendSync('seek', t);
   };
+  const doPlay = () => readyRef.current ? playerRef.current.playVideo() : setStatus('Not ready');
+  const doPause = () => readyRef.current ? playerRef.current.pauseVideo() : setStatus('Not ready');
 
   return (
     <AppLayout breadcrumbs={breadcrumbs}>
@@ -227,7 +209,7 @@ export default function Watch({ room }: { room: Room }) {
           <div className="flex items-center justify-between px-6 py-4 border-b">
             <div className="flex items-center space-x-3">
               <Film className="w-6 h-6 text-indigo-600" />
-              <h2 className="text-xl font-semibold text-gray-800">Room: {room.name}</h2>
+              {/* <h2 className="text-xl font-semibold text-gray-800">Room: {room.name}</h2> */}
             </div>
             <div className="flex items-center space-x-2">
               <label className="flex items-center space-x-1 text-sm text-gray-600">
@@ -248,17 +230,14 @@ export default function Watch({ room }: { room: Room }) {
 
           {/* Video or waiting */}
           {allUsersStarted ? (
-            <div className="relative bg-black aspect-video">
-              <div
-                ref={playerContainerRef}
-                className="w-full h-full youtube-player-container pointer-events-none"
-              />
+            <div className="relative aspect-video">
+              <div ref={playerContainerRef} className="w-full h-full youtube-player-container" />
             </div>
           ) : (
             <div className="relative bg-black aspect-video flex items-center justify-center">
               {!start ? (
                 <button
-                  onClick={sendUserStarted}
+                  onClick={doStart}
                   className="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-full shadow-xl transition"
                 >
                   Start
@@ -269,7 +248,7 @@ export default function Watch({ room }: { room: Room }) {
             </div>
           )}
 
-          {/* Status/Error */}
+          {/* status/error */}
           {status && (
             <div className="px-6 py-2 text-sm text-gray-500">
               Status: <span className="font-medium">{status}</span>
@@ -281,10 +260,10 @@ export default function Watch({ room }: { room: Room }) {
           {allUsersStarted && (
             <div className="px-6 py-4 border-t bg-white flex flex-col space-y-4">
               <div className="flex items-center justify-center space-x-6">
-                <button onClick={play} className="p-3 bg-indigo-50 rounded-full hover:bg-indigo-100">
+                <button onClick={doPlay} className="p-3 bg-indigo-50 rounded-full hover:bg-indigo-100">
                   <Play className="w-6 h-6 text-indigo-600" />
                 </button>
-                <button onClick={pause} className="p-3 bg-indigo-50 rounded-full hover:bg-indigo-100">
+                <button onClick={doPause} className="p-3 bg-indigo-50 rounded-full hover:bg-indigo-100">
                   <Pause className="w-6 h-6 text-indigo-600" />
                 </button>
                 <button
@@ -305,7 +284,7 @@ export default function Watch({ room }: { room: Room }) {
                   max={duration}
                   step={0.1}
                   value={seekTime}
-                  onChange={handleSeekChange}
+                  onChange={handleSeek}
                   className="flex-1 h-1 rounded-lg appearance-none bg-gray-300 accent-indigo-600 cursor-pointer"
                 />
                 <span className="text-xs text-gray-600">{duration.toFixed(1)}s</span>

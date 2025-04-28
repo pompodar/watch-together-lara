@@ -17,8 +17,13 @@ import AppLogoIcon from './app-logo-icon';
 
 const mainNavItems: NavItem[] = [
     {
-        title: 'Dashboard',
+        title: 'ss',
         href: '/dashboard',
+        icon: LayoutGrid,
+    },
+    {
+        title: 'Create Room',
+        href: '/rooms/create',
         icon: LayoutGrid,
     },
 ];
