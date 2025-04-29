@@ -53,7 +53,6 @@ Route::middleware(['auth', 'verified'])->group(function () {
 
     Route::post('/api/rooms/{name}/user-started', [RoomController::class, 'userStarted']);
     Route::post('/api/rooms/{name}/user-joined', [RoomController::class, 'userJoined']);
-    Route::get('/api/rooms/{name}/users', [RoomController::class, 'getUsers']);
     Route::post('/api/rooms/{name}/webrtc-signal', [RoomController::class, 'webrtcSignal']);
 });
 
