@@ -8,6 +8,10 @@ import AppLayout from '@/layouts/app-layout';
 import { Head } from '@inertiajs/react';
 import { type BreadcrumbItem } from '@/types';
 
+interface BufferedPeerConnection extends PeerConnection {
+  bufferedCandidates?: RTCIceCandidate[];
+}
+
 interface Room {
   name: string;
   youtube_video_id: string;
@@ -194,42 +198,63 @@ export default function Watch({ room }: { room: Room }) {
   }, []);
 
   // Echo setup
-  useEffect(() => {
-    if (!room.name) return;
-    window.Pusher = Pusher;
-    Pusher.logToConsole = true;
-    window.Echo = new Echo({
-      broadcaster: 'pusher',
-      key: import.meta.env.VITE_PUSHER_APP_KEY,
-      cluster: import.meta.env.VITE_PUSHER_APP_CLUSTER,
-      forceTLS: true,
-    });
-    const chan = window.Echo.channel(`public-room.${room.name}`);
-    const chanStarted = window.Echo.channel(`public-room-users-started.${room.name}`);
-    const webRTCChannel = window.Echo.channel(`public-room-webrtc.${room.name}`);
+    useEffect(() => {
+        if (!room.name) return;
+        window.Pusher = Pusher;
+        Pusher.logToConsole = true;
+        window.Echo = new Echo({
+            broadcaster: 'pusher',
+            key: import.meta.env.VITE_PUSHER_APP_KEY,
+            cluster: import.meta.env.VITE_PUSHER_APP_CLUSTER,
+            forceTLS: true,
+        });
+        const chan = window.Echo.channel(`public-room.${room.name}`);
+        const chanStarted = window.Echo.channel(`public-room-users-started.${room.name}`);
+        const webRTCChannel = window.Echo.channel(`public-room-webrtc.${room.name}`);
+        const chanJoined = window.Echo.channel(`public-room-users-joined.${room.name}`);
 
-    chan.listen('.sync', handleSyncEvent);
+        chan.listen('.sync', handleSyncEvent);
 
-    chan.listen('.user-joined', (d: any) => {
-      if (!userList.includes(d.source)) setUserList(u => [...u, d.source]);
+        chanJoined.listen('.user-joined', (d: any) => {
+            console.log("JOINED", d);
 
-      // If we already have our camera on, send an offer to the new user
-      if (localStream && cameraEnabled && d.source !== syncSource) {
-        createPeerConnection(d.source);
-      }
-    });
+            if (!userList.includes(d.source)) setUserList(u => [...u, d.source]);
+            console.log(localStream, cameraEnabled, d.source, syncSource, "LOCAL STREAM");
 
-    chanStarted.listen('.user-started', () => setUsersStarted(u => u + 1));
+            // If we already have our camera on, send an offer to the new user
+            if (localStream && cameraEnabled && d.source !== syncSource) {
+
+                createPeerConnection(d.source);
+
+                alert("New user joined, creating peer connection");
+            }
+        });
+
+        chanStarted.listen('.user-started', (data) => {
+            setUsersStarted(u => u + 1);
+        console.log('!!!!!User started:', data);
+
+        });
+
+
 
     // WebRTC signaling
-    webRTCChannel.listen('.signal', (data: PeerSignal) => {
-      if (data.target === syncSource) {
-        handleWebRTCSignal(data);
-      }
+      webRTCChannel.listen('.signal', (data: PeerSignal) => {
+        console.log("signal!!!!!", data.signal.target, syncSource);
+           if (data.signal.target === syncSource) {
+              console.log("caught", data.signal);
+
+        handleWebRTCSignal(data.signal);
+       }
     });
 
-    axios.post(`/api/rooms/${room.name}/user-joined`, { source: syncSource });
-    axios.get(`/api/rooms/${room.name}/users`).then(r => setUserList(r.data.users));
+      axios.post(`/api/rooms/${room.name}/user-joined`, { source: syncSource })
+        .then((data) => {
+          console.log('Joined room!!!!', data);
+        })
+        .catch(err => {
+          setError(`Failed to join room: ${err instanceof Error ? err.message : String(err)}`);
+        });
 
     return () => {
       window.Echo.leaveChannel(`public-room.${room.name}`);
@@ -287,7 +312,9 @@ export default function Watch({ room }: { room: Room }) {
         }
 
         // Create peer connections with all users in the room
-        userList.forEach(userId => {
+          userList.forEach(userId => {
+            console.log(userId, syncSource, "userId");
+
           if (userId !== syncSource) {
             createPeerConnection(userId, stream);
           }
@@ -454,8 +481,12 @@ export default function Watch({ room }: { room: Room }) {
         });
       }
 
+        console.log(stream, "STREAM");
+
+
       // Handle ICE candidates
-      pc.onicecandidate = (event) => {
+        pc.onicecandidate = (event) => {
+        console.log('ICE candidate:', event.candidate);
         if (event.candidate) {
           sendSignal({
             type: 'ice-candidate',
@@ -467,7 +498,9 @@ export default function Watch({ room }: { room: Room }) {
       };
 
       // Handle remote stream
-      pc.ontrack = (event) => {
+        pc.ontrack = (event) => {
+            console.log('Received remote track:', event.track);
+
         setPeerConnections(prev => ({
           ...prev,
           [targetId]: {
@@ -520,112 +553,184 @@ export default function Watch({ room }: { room: Room }) {
   };
 
   // Send WebRTC signal via Pusher
-  const sendSignal = (signal: PeerSignal) => {
-    axios.post(`/api/rooms/${room.name}/webrtc-signal`, signal);
+    const sendSignal = (signal: PeerSignal) => {
+      console.log('sending signal', signal);
+
+      axios.post(`/api/rooms/${room.name}/webrtc-signal`, signal)
+          .then((data) => {
+            console.log('Signal sent', data);
+          })
+        .catch(err => {
+          setError(`Failed to send WebRTC signal: ${err instanceof Error ? err.message : String(err)}`);
+        });
   };
 
   // Handle incoming WebRTC signals
-  const handleWebRTCSignal = async (signal: PeerSignal) => {
-    const { type, data, source } = signal;
+const handleWebRTCSignal = async (signal: PeerSignal) => {
+  const { type, data, source } = signal;
 
-    try {
-      switch (type) {
-        case 'offer': {
-          // Create new peer connection if it doesn't exist
-          if (!peerConnections[source]) {
-            const pc = new RTCPeerConnection(rtcConfig);
+  // Only process signals intended for this client
+  if (signal.target !== syncSource) {
+    console.log("Ignored signal - not targeted at me");
+    return;
+  }
 
-            // Add local stream
-            if (localStream) {
-              localStream.getTracks().forEach(track => {
-                pc.addTrack(track, localStream);
+                  data.sdp += '\n';
+
+
+  try {
+    switch (type) {
+      case 'offer': {
+        console.log('Received offer:', data);
+
+        // Create new peer connection if it doesn't exist
+        if (!peerConnections[source]) {
+          const pc = new RTCPeerConnection(rtcConfig);
+          const bufferedCandidates: RTCIceCandidate[] = [];
+
+          // Store buffered ICE candidates temporarily
+          (pc as any).bufferedCandidates = [];
+
+          // Add local stream if available
+          if (localStream) {
+            localStream.getTracks().forEach(track => {
+              pc.addTrack(track, localStream);
+            });
+          }
+
+          // Handle ICE candidates
+          pc.onicecandidate = (event) => {
+            if (event.candidate) {
+              sendSignal({
+                type: 'ice-candidate',
+                data: event.candidate,
+                source: syncSource,
+                target: source
               });
             }
+          };
 
-            // Handle ICE candidates
-            pc.onicecandidate = (event) => {
-              if (event.candidate) {
-                sendSignal({
-                  type: 'ice-candidate',
-                  data: event.candidate,
-                  source: syncSource,
-                  target: source
-                });
-              }
-            };
-
-            // Handle remote stream
-            pc.ontrack = (event) => {
-              setPeerConnections(prev => ({
-                ...prev,
-                [source]: {
-                  ...prev[source],
-                  stream: event.streams[0]
-                }
-              }));
-            };
-
+          // Handle remote stream
+          pc.ontrack = (event) => {
+            console.log('Remote track received:', event.track.kind);
             setPeerConnections(prev => ({
               ...prev,
               [source]: {
-                connection: pc,
-                stream: null,
-                sourceId: source
+                ...prev[source],
+                stream: event.streams[0]
               }
             }));
+          };
 
-            // Set remote description
+          // Set remote description
+          try {
             await pc.setRemoteDescription(new RTCSessionDescription(data));
 
-            // Create and send answer
-            const answer = await pc.createAnswer();
-            await pc.setLocalDescription(answer);
+            // Process buffered ICE candidates
+            while ((pc as any).bufferedCandidates.length > 0) {
+              const candidate = (pc as any).bufferedCandidates.shift();
+              await pc.addIceCandidate(candidate);
+            }
+          } catch (err) {
+            console.error('Failed to set remote description:', err);
+            setError(`SDP Error: ${err instanceof Error ? err.message : String(err)}`);
+            return;
+          }
 
-            sendSignal({
-              type: 'answer',
-              data: answer,
-              source: syncSource,
-              target: source
-            });
-          } else {
-            // Update existing connection
-            const pc = peerConnections[source].connection;
+          // Create answer
+          const answer = await pc.createAnswer();
+
+          // Force consistent DTLS roles:
+          // Offerer = active, Answerer = passive
+          answer.sdp = answer.sdp!.replace(/a=setup:actpass/g, 'a=setup:passive');
+
+          await pc.setLocalDescription(answer);
+
+          // Send answer back
+          sendSignal({
+            type: 'answer',
+            data: answer,
+            source: syncSource,
+            target: source
+          });
+
+          // Save peer connection
+          setPeerConnections(prev => ({
+            ...prev,
+            [source]: {
+              connection: pc,
+              stream: null,
+              sourceId: source
+            }
+          }));
+        } else {
+          // Existing connection - just update remote description
+          const pc = peerConnections[source].connection;
+          try {
             await pc.setRemoteDescription(new RTCSessionDescription(data));
-
-            // Create and send answer
-            const answer = await pc.createAnswer();
-            await pc.setLocalDescription(answer);
-
-            sendSignal({
-              type: 'answer',
-              data: answer,
-              source: syncSource,
-              target: source
-            });
+          } catch (err) {
+            console.error('Failed to update existing connection:', err);
           }
-          break;
-        }
 
-        case 'answer': {
-          const pc = peerConnections[source]?.connection;
-          if (pc) {
-            await pc.setRemoteDescription(new RTCSessionDescription(data));
-          }
-          break;
+          // Create and send answer
+          const answer = await pc.createAnswer();
+          answer.sdp = answer.sdp!.replace(/a=setup:actpass/g, 'a=setup:passive');
+          await pc.setLocalDescription(answer);
+          sendSignal({
+            type: 'answer',
+            data: answer,
+            source: syncSource,
+            target: source
+          });
         }
-
-        case 'ice-candidate': {
-          const pc = peerConnections[source]?.connection;
-          if (pc) {
-            await pc.addIceCandidate(new RTCIceCandidate(data));
-          }
-          break;
-        }
+        break;
       }
-    } catch (err) {
-      setError(`WebRTC error: ${err instanceof Error ? err.message : String(err)}`);
+
+      case 'answer': {
+        const pc = peerConnections[source]?.connection;
+        if (!pc) {
+          console.warn('Answer received but no peer connection exists');
+          return;
+        }
+
+        try {
+          await pc.setRemoteDescription(new RTCSessionDescription(data));
+        } catch (err) {
+          console.error('Failed to set remote answer:', err);
+        }
+        break;
+      }
+
+      case 'ice-candidate': {
+        const pc = peerConnections[source]?.connection;
+        if (!pc) {
+          console.warn('ICE candidate received but no peer connection exists');
+          return;
+        }
+
+        const candidate = new RTCIceCandidate(data);
+
+        if (pc.remoteDescription) {
+          try {
+            await pc.addIceCandidate(candidate);
+          } catch (err) {
+            console.error('Failed to add ICE candidate:', err);
+          }
+        } else {
+          // Buffer candidate until remote description is set
+          if (!(pc as any).bufferedCandidates) {
+            (pc as any).bufferedCandidates = [];
+          }
+          (pc as any).bufferedCandidates.push(candidate);
+        }
+        break;
+      }
     }
-  };
+  } catch (err) {
+    setError(`WebRTC error: ${err instanceof Error ? err.message : String(err)}`);
+    console.error('WebRTC error:', err);
+  }
+};
 
   return (
     <AppLayout breadcrumbs={breadcrumbs}>

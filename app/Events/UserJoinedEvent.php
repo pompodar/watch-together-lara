@@ -37,7 +37,15 @@ class UserJoinedEvent implements ShouldBroadcast
     public function broadcastOn(): array
     {
         return [
-            new Channel("public-room.{$this->room_name}"),
+            new Channel("public-room-users-joined.{$this->room_name}"),
+        ];
+    }
+
+    public function broadcastWith(): array
+    {
+        return [
+            'room_name' => $this->room_name,
+            'source' => $this->source
         ];
     }
 
