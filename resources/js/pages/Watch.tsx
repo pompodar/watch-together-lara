@@ -214,6 +214,8 @@ export default function Watch({ room }: { room: Room }) {
       const logPcPrefix = `${LOG_PREFIX} PC (${syncSource} <-> ${peerId})`;
       let pcEntry = peerConnections.current[peerId]; let pc = pcEntry?.connection;
 
+      data.sdp += '\n';
+
       try {
           switch (type) {
               case 'offer': {
