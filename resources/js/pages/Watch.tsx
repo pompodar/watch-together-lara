@@ -217,7 +217,7 @@ export default function Watch({ room }: { room: Room }) {
       try {
           switch (type) {
               case 'offer': {
-                  console.log(`${logSigPrefix} Processing...`); const offer = data as RTCSessionDescriptionInit; offer.sdp += '\n';
+                  console.log(`${logSigPrefix} Processing...`); const offer = data as RTCSessionDescriptionInit;
                   if (!pc) { console.log(`${logPcPrefix} Creating conn for offer.`); pc = await createPeerConnection(peerId, false); if (!pc) return; pcEntry = peerConnections.current[peerId]; } else console.log(`${logPcPrefix} Existing conn. State: ${pc.signalingState}`);
                   const amIPolite = syncSource < peerId; const collision = pc.signalingState === 'have-local-offer';
                   if (collision && !amIPolite) { console.warn(`${logPcPrefix} Offer collision, impolite ignore.`); return; }
