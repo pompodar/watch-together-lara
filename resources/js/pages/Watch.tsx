@@ -226,7 +226,7 @@ export default function Watch({ room }: { room: Room }) {
           {/* Header */}
           <div className="flex items-center justify-between px-6 py-4 border-b">
             <div className="flex items-center space-x-3">
-              <Film className="w-6 h-6 text-indigo-600" />
+              <Film className="w-6 h-6 text-yellow-600" />
               <h2 className="text-xl font-semibold text-gray-800">Room: {room.name}</h2>
             </div>
             <div className="flex items-center space-x-2">
@@ -235,7 +235,7 @@ export default function Watch({ room }: { room: Room }) {
                   type="checkbox"
                   checked={syncEnabled}
                   onChange={() => setSyncEnabled(!syncEnabled)}
-                  className="h-4 w-4 text-indigo-600 rounded"
+                  className="h-4 w-4 text-yellow-600 rounded"
                 />
                 <span>Sync</span>
               </label>
@@ -259,7 +259,7 @@ export default function Watch({ room }: { room: Room }) {
               {!start ? (
                 <button
                   onClick={sendUserStarted}
-                  className="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-full shadow-xl transition"
+                  className="px-6 py-3 bg-yellow-600 hover:bg-yellow-700 text-white rounded-full shadow-xl transition"
                 >
                   Start
                 </button>
@@ -281,20 +281,20 @@ export default function Watch({ room }: { room: Room }) {
           {allUsersStarted && (
             <div className="px-6 py-4 border-t bg-white flex flex-col space-y-4">
               <div className="flex items-center justify-center space-x-6">
-                <button onClick={play} className="p-3 bg-indigo-50 rounded-full hover:bg-indigo-100">
-                  <Play className="w-6 h-6 text-indigo-600" />
+                <button onClick={play} className="p-3 bg-yellow-50 rounded-full hover:bg-yellow-100">
+                  <Play className="w-6 h-6 text-yellow-600" />
                 </button>
-                <button onClick={pause} className="p-3 bg-indigo-50 rounded-full hover:bg-indigo-100">
-                  <Pause className="w-6 h-6 text-indigo-600" />
+                <button onClick={pause} className="p-3 bg-yellow-50 rounded-full hover:bg-yellow-100">
+                  <Pause className="w-6 h-6 text-yellow-600" />
                 </button>
                 <button
                   onClick={() => {
                     setSeekTime(0);
                     readyRef.current && playerRef.current.seekTo(0, true);
                   }}
-                  className="p-3 bg-indigo-50 rounded-full hover:bg-indigo-100"
+                  className="p-3 bg-yellow-50 rounded-full hover:bg-yellow-100"
                 >
-                  <RefreshCw className="w-6 h-6 text-indigo-600" />
+                  <RefreshCw className="w-6 h-6 text-yellow-600" />
                 </button>
               </div>
               <div className="flex items-center space-x-3">
@@ -306,7 +306,7 @@ export default function Watch({ room }: { room: Room }) {
                   step={0.1}
                   value={seekTime}
                   onChange={handleSeekChange}
-                  className="flex-1 h-1 rounded-lg appearance-none bg-gray-300 accent-indigo-600 cursor-pointer"
+                  className="flex-1 h-1 rounded-lg appearance-none bg-gray-300 accent-yellow-600 cursor-pointer"
                 />
                 <span className="text-xs text-gray-600">{duration.toFixed(1)}s</span>
               </div>
