@@ -13,6 +13,9 @@ use App\Events\UserStartedEvent;
 use App\Events\UserJoinedEvent;
 use App\Events\RoomSyncEvent;
 use App\Events\WebRTCSignalEvent;
+use App\Models\RoomUser;
+use App\Models\User;
+use Illuminate\Support\Facades\Auth;
 
 class RoomController extends Controller
 {
@@ -139,11 +142,52 @@ class RoomController extends Controller
 
     public function userJoined(Request $request, $name)
     {
+        $room = Room::where('name', $name)->first();
+
         $source = $request->input('source', 'unknown-source');
+
+        $user = Auth::user();
+
+        $user_id = $user->id ?? null;
+
+        // Check if the user is already in the room
+        $existingUser = RoomUser::where('room_id', $room->id)
+            ->where('user_id', $user_id)
+            ->first();
+
+        if ($existingUser) {
+            return response()->json([
+                'success' => true,
+                'message' => 'User is already in the room',
+                'room_users' => RoomUser::where('room_id', $room->id)->get(),
+            ]);
+        }
+
+        if (!$room) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Room not found',
+            ], 404);
+        }
+
+        if (!$user) {
+            return response()->json([
+                'success' => false,
+                'message' => 'User not found',
+            ], 404);
+        }
+
+        $room_user = RoomUser::create([
+            'room_id' => $room->id,
+            'user_id' => $user_id,
+            'user_code' => $source,
+        ]);
+
+        $room_user->save();
 
         try {
             // Create the event
-            $event = new \App\Events\UserJoinedEvent($name, $source);
+            $event = new \App\Events\UserJoinedEvent($name, RoomUser::where('room_id', $room->id)->get());
 
             // Broadcast the event - use event() helper for more direct broadcasting
             event($event);
@@ -162,8 +206,7 @@ class RoomController extends Controller
             $channelName = 'public-room-users-joined.' . $name;
             $eventName = 'user-joined';
             $data = [
-                'room_name' => $name,
-                'source' => $source
+                'room_users' => RoomUser::where('room_id', $room->id)->get()
             ];
 
             // Direct trigger to Pusher
@@ -171,9 +214,8 @@ class RoomController extends Controller
 
             return response()->json([
                 'success' => true,
-                'message' => 'Sync event broadcast successfully',
-                'room_name' => $name,
-                'source' => $source
+                'message' => 'User joined successfully',
+                'room_users' => RoomUser::where('room_id', $room->id)->get(),
             ]);
         } catch (\Exception $e) {
             return response()->json([
@@ -181,13 +223,6 @@ class RoomController extends Controller
                 'message' => 'Failed to broadcast sync event: ' . $e->getMessage()
             ], 500);
         }
-    }
-
-    public function getUsers(Room $room)
-    {
-        $users = \App\Models\User::all()->pluck('id')->toArray();
-
-        return response()->json(['users' => $users]);
     }
 
     /**

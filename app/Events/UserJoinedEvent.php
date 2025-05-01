@@ -15,18 +15,18 @@ class UserJoinedEvent implements ShouldBroadcast
     use Dispatchable, InteractsWithSockets, SerializesModels;
 
     public $room_name;
-    public $source;
+    public $room_users;
 
     /**
      * Create a new event instance.
      *
      * @param string $room_name
-     * @param string $source
+     * @param array $room_users
      */
-    public function __construct(string $room_name, string $source)
+    public function __construct(string $room_name, $room_users)
     {
         $this->room_name = $room_name;
-        $this->source = $source;
+        $this->room_users = $room_users instanceof \Illuminate\Database\Eloquent\Collection ? $room_users->toArray() : $room_users;
     }
 
     /**
@@ -41,12 +41,9 @@ class UserJoinedEvent implements ShouldBroadcast
         ];
     }
 
-    public function broadcastWith(): array
+    public function broadcastWith()
     {
-        return [
-            'room_name' => $this->room_name,
-            'source' => $this->source
-        ];
+        return $this->room_users;
     }
 
     /**

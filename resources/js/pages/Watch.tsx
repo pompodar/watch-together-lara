@@ -757,16 +757,20 @@ export default function Watch({ room }: { room: Room }) {
         // User Joined Listener
         echoInstance.channel(channels.joined)
             .listen('.user-joined', (data: { source: string; currentUsers ? : string[] }) => {
-                console.log(`${LOG_PREFIX} RECV .user-joined from ${data.source}`);
-                // Update user list (prefer backend list if provided)
-                if (data.currentUsers) { setUserList(data.currentUsers); }
-                else { setUserList(prev => prev.includes(data.source) ? prev : [...prev, data.source]); }
+                console.log(`${LOG_PREFIX} RECV .user-joined from ${data}`);
+                // Update user list
+                setUserList(prev => {
+                    const newUsers = data.room_users.map((user: { user_code: string }) => user.user_code);
+                    return [...prev, ...newUsers.filter(userCode => !prev.includes(userCode))];
+                });
 
                 // Initiate connection to the new user *if* our media is already active
-                if (data.source !== syncSource && localStream) {
-                    console.log(`${LOG_PREFIX} New user ${data.source} joined, initiating connection.`);
-                    createPeerConnection(data.source, true); // We initiate
-                }
+                data.room_users.forEach(element => {
+                    if (element.user_code !== syncSource && localStream && !peerConnections.current[element.user_code]) {
+                        console.log(`${LOG_PREFIX} New user ${element.user_code} joined, initiating connection.`);
+                        createPeerConnection(element.user_code, true); // We initiate
+                    }
+                });
             });
 
         // User Left Listener
@@ -788,8 +792,7 @@ export default function Watch({ room }: { room: Room }) {
             .then(response => {
                 console.log(`${LOG_PREFIX} Join announced. Initial state:`, response.data);
                 // Set initial state based on reliable response from backend
-                if (response.data?.currentUsers) { setUserList(response.data.currentUsers); }
-                if (response.data?.startedCount !== undefined) { setUsersStartedCount(response.data.startedCount); }
+                setUserList(response.data.room_users.map((user: { user_code: string }) => user.user_code));
             })
             .catch(err => {
                 console.error(`${LOG_PREFIX} Join announce fail:`, err);
