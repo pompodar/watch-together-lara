@@ -3,7 +3,7 @@ import axios from 'axios';
 import Echo from 'laravel-echo';
 import Pusher from 'pusher-js';
 import { debounce } from 'lodash';
-import { Play, Pause, Users, Film, RefreshCw, Video, VideoOff, Mic, MicOff } from 'lucide-react';
+import { Play, Pause, Users, Film, RefreshCw, Video, VideoOff, Mic, MicOff, MessageSquare, Send } from 'lucide-react';
 import AppLayout from '@/layouts/app-layout';
 import { Head } from '@inertiajs/react';
 import { type BreadcrumbItem } from '@/types';
@@ -20,6 +20,15 @@ interface PeerConnectionEntry {
     connection: RTCPeerConnection;
     stream: MediaStream | null;
     sourceId: string; // The ID of the remote peer
+}
+
+// --- NEW: Chat Message Interface ---
+interface ChatMessage {
+    id: string; // Unique ID (e.g., UUID from backend or timestamp+random)
+    senderId: string;
+    senderName?: string; // Optional: Display name if available
+    text: string;
+    timestamp: number; // Unix timestamp (milliseconds or seconds)
 }
 
 interface Room {
@@ -164,6 +173,14 @@ export default function Watch({ room }: { room: Room }) {
     // --- Derived State ---
     const usersInRoom = userList.length;
     const allUsersStarted = usersInRoom > 0 && usersStartedCount >= usersInRoom;
+
+    // --- NEW: Chat State ---
+    const [chatMessages, setChatMessages] = useState < ChatMessage[] > ([]);
+    const [currentMessage, setCurrentMessage] = useState('');
+
+    // --- NEW: Chat Refs ---
+    const chatContainerRef = useRef < HTMLDivElement > (null); // For scrolling
+    const chatInputRef = useRef<HTMLInputElement>(null); // For focus
 
     // ============================================================================
     // Utility Functions & Callbacks
@@ -704,7 +721,8 @@ export default function Watch({ room }: { room: Room }) {
             started: `public-room-users-started.${room.name}`,
             webrtc: `public-room-webrtc.${room.name}`,
             joined: `public-room-users-joined.${room.name}`,
-            left: `public-room-users-left.${room.name}`
+            left: `public-room-users-left.${room.name}`,
+            chat: `public-chat.${room.name}` // <-- Added chat channel name
         };
         console.log(`${LOG_PREFIX} Subscribing to channels:`, channels);
 
@@ -772,6 +790,24 @@ export default function Watch({ room }: { room: Room }) {
                     }
                 });
             });
+
+        // --- NEW: Chat Channel Listener ---
+        echoInstance.channel(channels.chat)
+            .listen('.new-message', (message) => {
+                console.log(`${LOG_PREFIX} RECV .new-message from ${message}: "${message.message_text}"`);
+                console.log(message)
+                // Add message only if it's not already present (handles potential echo)
+                setChatMessages(prev => {
+                    if (prev.some(m => m.id === message.id)) {
+                        return prev; // Already have this message
+                    }
+                    // Keep only the last N messages to prevent performance issues (e.g., 100)
+                    const limitedMessages = prev.slice(-99);
+                    return [...limitedMessages, message];
+                });
+                // Optional: Indicate new message if window not focused
+            });
+        console.log(`${LOG_PREFIX} Listening on chat channel: ${channels.chat}`);
 
         // User Left Listener
         echoInstance.channel(channels.left)
@@ -862,6 +898,25 @@ export default function Watch({ room }: { room: Room }) {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [closePeerConnection, room.name, stopPolling, syncSource]); // Dependencies needed by cleanup
 
+    /** Effect to scroll chat container to the bottom when new messages arrive */
+    useEffect(() => {
+        // console.log(`${LOG_PREFIX} Effect: Checking chat scroll.`);
+        if (chatContainerRef.current) {
+            const { scrollHeight, clientHeight } = chatContainerRef.current;
+            // Scroll down only if the user isn't scrolled up significantly
+            // (allows users to read older messages without being forced down)
+            const isScrolledUp = chatContainerRef.current.scrollTop < scrollHeight - clientHeight - 100; // 100px tolerance
+            if (!isScrolledUp) {
+                 // Use requestAnimationFrame for smoother scrolling after render
+                 requestAnimationFrame(() => {
+                     if (chatContainerRef.current) {
+                        chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+                     }
+                 });
+            }
+            // else { console.log(`${LOG_PREFIX} User scrolled up, not auto-scrolling chat.`); }
+        }
+    }, [chatMessages]); // Run whenever chatMessages array changes
 
     // --- Effects for Decoupled Media Handling ---
 
@@ -1040,6 +1095,55 @@ export default function Watch({ room }: { room: Room }) {
         }
         console.log(`${LOG_PREFIX} Action: Manual Pause.`);
         playerRef.current.pauseVideo();
+    };
+
+        /** Sends a new chat message */
+    const sendMessage = (e ? : React.FormEvent < HTMLFormElement > ) => {
+        e?.preventDefault(); // Prevent default form submission if used in a form
+        const messageText = currentMessage.trim();
+
+        if (!messageText || !echoRef.current) {
+            return; // Don't send empty messages or if not connected
+        }
+
+        console.log(`${LOG_PREFIX} Sending chat message: "${messageText}"`);
+        setStatus('Sending message...');
+
+        // Optimistic UI update (optional but improves perceived speed)
+        // const optimisticId = `optimistic-${Date.now()}`;
+        // const optimisticMessage: ChatMessage = {
+        //     id: optimisticId,
+        //     senderId: syncSource,
+        //     text: messageText,
+        //     timestamp: Date.now(),
+        //     senderName: 'You' // Placeholder name
+        // };
+        // setChatMessages(prev => [...prev, optimisticMessage]);
+
+        setCurrentMessage(''); // Clear input field immediately
+
+        // Send to backend
+        axios.post(`/api/rooms/${room.name}/chat`, {
+                message: messageText,
+                source: syncSource,
+                // Include senderName if you have it
+            })
+            .then(() => {
+                console.log(`${LOG_PREFIX} Chat message sent successfully.`);
+                setStatus('Message sent.');
+                // If not using optimistic update, you'd wait for the broadcast
+            })
+            .catch(err => {
+                console.error(`${LOG_PREFIX} Failed to send chat message:`, err);
+                setError(`Failed to send message: ${err.message}`);
+                // Rollback optimistic update if used
+                // setChatMessages(prev => prev.filter(msg => msg.id !== optimisticId));
+                setCurrentMessage(messageText); // Put message back in input on failure
+                setStatus('Failed to send.');
+            });
+
+        // Refocus input after sending
+        chatInputRef.current?.focus();
     };
 
     /** Handles seek bar value change (during drag) */
@@ -1306,7 +1410,6 @@ export default function Watch({ room }: { room: Room }) {
                          {
                             videoChatVisible && (
                                 <div className="w-full md:w-1/4 border-t md:border-t-0 md:border-l bg-gray-50 flex flex-col" style={{ maxHeight: 'calc(100vh - 100px)', minHeight: '300px' }} >
-
                                      { /* Sidebar Header & Media Controls */ }
                                     <div className="p-4 border-b sticky top-0 bg-gray-50 z-10 flex-shrink-0" >
                                         <h3 className="font-medium text-gray-700 mb-3 text-center" > Video Chat </h3>
@@ -1353,14 +1456,81 @@ export default function Watch({ room }: { room: Room }) {
                                         {/* Placeholder Messages (remain the same) */}
                                         {Object.values(remoteStreams).filter(s => s?.active && s.getTracks().length > 0).length === 0 && (cameraEnabled || micEnabled) && ( <p className='text-xs text-gray-500 text-center mt-4 px-2'>Waiting for others...</p> )}
                                         {!(cameraEnabled || micEnabled) && ( <p className='text-xs text-gray-500 text-center mt-4 px-2'>Turn on camera/mic to chat.</p> )}
-
                                     </div> {/* End Video Previews Container */}
+
+                                    {/* Video Chat Sidebar */}
+                                    {videoChatVisible && (
+                                    <div className="w-full border-t md:border-t-0 md:border-l bg-gray-50 flex flex-col" style={{ maxHeight: 'calc(100vh - 100px)', minHeight: '300px' }}>
+                                        {/* --- Bottom Section: Text Chat --- */}
+                                        <div className="flex flex-col flex-grow border-t min-h-0"> {/* Flex grow for chat area */}
+                                            <h3 className="text-sm font-semibold text-gray-700 p-3 pb-2 border-b flex items-center gap-2 flex-shrink-0">
+                                                <MessageSquare className="w-4 h-4 text-gray-500" />
+                                                Room Chat
+                                            </h3>
+
+                                            {/* Message List */}
+                                            <div ref={chatContainerRef} className="flex-grow overflow-y-auto p-3 space-y-3">
+                                                {chatMessages.map((msg) => {
+                                                    const isOwnMessage = msg.sender_id === syncSource;
+                                                    return (
+                                                        <div key={msg.id} className={`w-full flex flex-col ${isOwnMessage ? 'items-end' : 'items-start'}`}>
+                                                            <div className={`max-w-[80%] px-3 py-2 rounded-lg shadow-sm ${
+                                                                isOwnMessage
+                                                                    ? 'bg-indigo-500 text-white rounded-br-none'
+                                                                    : 'bg-white text-gray-800 border border-gray-200 rounded-bl-none'
+                                                            }`}>
+                                                                {/* Optional: Display sender name for others */}
+                                                                {/* {!isOwnMessage && msg.senderName && (
+                                                                    <p className="text-xs font-semibold mb-0.5 text-indigo-600">{msg.senderName}</p>
+                                                                )} */}
+                                                                {!isOwnMessage && (
+                                                                    console.log(msg)
+                                                                    // <p className="text-xs font-semibold mb-0.5 text-gray-500" title={msg.sender_id}>Peer {msg.sender_id}</p>
+                                                                )}
+                                                                <p className="text-sm break-words">{msg.message_text}</p>
+                                                                <p className="text-xs mt-1 opacity-70 text-right">
+                                                                    {(new Date(msg.timestamp), 'HH:mm')} {/* Format timestamp */}
+                                                                </p>
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                })}
+                                                {chatMessages.length === 0 && (
+                                                    <p className="text-center text-xs text-gray-400 py-4">No messages yet.</p>
+                                                )}
+                                            </div>
+
+                                            {/* Message Input Form */}
+                                            <div className="p-3 border-t bg-gray-100 flex-shrink-0">
+                                                <form onSubmit={sendMessage} className="flex items-center space-x-2">
+                                                    <input
+                                                        ref={chatInputRef}
+                                                        type="text"
+                                                        value={currentMessage}
+                                                        onChange={(e) => setCurrentMessage(e.target.value)}
+                                                        placeholder="Type your message..."
+                                                        maxLength={250} // Prevent excessively long messages
+                                                        className="flex-grow px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                                                        autoComplete="off"
+                                                    />
+                                                    <button
+                                                        type="submit"
+                                                        disabled={!currentMessage.trim()}
+                                                        className="p-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-indigo-500"
+                                                        title="Send Message"
+                                                    >
+                                                        <Send className="w-5 h-5" />
+                                                    </button>
+                                                </form>
+                                            </div>
+                                        </div> {/* End Chat Section */}
+
+                                    </div> // End Sidebar
+                                    )}
                                 </div > // End Video Chat Sidebar
                             )
                         }
-
                     </div > { /* End Body Flex Container */ }
-
                 </div > { /* End White Card */ }
             </div > { /* End Gray Background */ }
         </AppLayout >

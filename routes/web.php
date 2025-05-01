@@ -54,6 +54,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::post('/api/rooms/{name}/user-started', [RoomController::class, 'userStarted']);
     Route::post('/api/rooms/{name}/user-joined', [RoomController::class, 'userJoined']);
     Route::post('/api/rooms/{name}/webrtc-signal', [RoomController::class, 'webrtcSignal']);
+    Route::post('/api/rooms/{room_name}/chat', [RoomController::class, 'sendMessage'])
+        ->where('room_name', '[a-zA-Z0-9_-]+');
 });
 
 Route::middleware(['auth', 'verified'])->get('/api/user', function (Request $request) {

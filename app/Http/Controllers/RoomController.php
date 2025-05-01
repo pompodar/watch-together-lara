@@ -16,6 +16,7 @@ use App\Events\WebRTCSignalEvent;
 use App\Models\RoomUser;
 use App\Models\User;
 use Illuminate\Support\Facades\Auth;
+use App\Events\ChatMessageSent;
 
 class RoomController extends Controller
 {
@@ -318,4 +319,77 @@ class RoomController extends Controller
 
     //     return response()->json(['status' => 'User removed from room list.']);
     // }
+
+    public function sendMessage(Request $request, string $name)
+    {
+        // 1. Validation (using Validator facade for simplicity here)
+        //    For more complex validation, consider a Form Request class.
+        $validator = Validator::make($request->all(), [
+            'message' => 'required|string|max:500', // Adjust max length as needed
+            'source' => 'required|string|max:100',   // Sender's client ID
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation failed',
+                'errors' => $validator->errors()
+            ], 422); // Unprocessable Entity
+        }
+
+        // 2. Get validated data
+        $validatedData = $validator->validated();
+        $message_text = $validatedData['message'];
+        $sender_id = $validatedData['source'];
+
+        // 3. Create and Dispatch the Broadcast Event
+        try {
+            $event = new \App\Events\ChatMessageSent($name, $message_text, $sender_id);
+
+            // Broadcast the event - use event() helper for more direct broadcasting
+            event($event);
+
+            // Alternative direct broadcast to ensure it's working
+            $pusher = new \Pusher\Pusher(
+                env('PUSHER_APP_KEY'),
+                env('PUSHER_APP_SECRET'),
+                env('PUSHER_APP_ID'),
+                [
+                    'cluster' => env('PUSHER_APP_CLUSTER'),
+                    'useTLS' => true,
+                ]
+            );
+
+            $channelName = 'public-chat.' . $name;
+            $eventName = 'new-message';
+            $data = [
+                'id' => Str::uuid(), // Generate a unique ID for the message
+                'room_name' => $name,
+                'message_text' => $message_text,
+                'sender_id' => $sender_id,
+            ];
+
+            // Direct trigger to Pusher
+            $pusher->trigger($channelName, $eventName, $data);
+
+            // 4. Return Success Response
+            return response()->json([
+                'success' => true,
+                'message' => 'Message sent successfully.',
+                'sent_message' => [ // Optionally return the processed message details
+                    'senderId' => $sender_id,
+                    'text' => $message_text,
+                ]
+            ]);
+        } catch (\Exception $e) {
+            // Log the error for debugging
+            \Log::error("Failed to broadcast chat message for room {$roomName}: " . $e->getMessage());
+
+            // Return error response
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to broadcast message due to a server error.'
+            ], 500); // Internal Server Error
+        }
+    }
 }
